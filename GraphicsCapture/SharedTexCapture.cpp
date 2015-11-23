@@ -41,6 +41,9 @@ void SharedTexCapture::Destroy()
 
 bool SharedTexCapture::Init(CaptureInfo &info)
 {
+	// TODO: Craig, somehow `info` already has height/width and CaptureType=SharedTex. Need to figure out how this happens. Can we get the device??? 
+	// Is there an FPS overlay open source project that has a simpler method???
+	// Answer: there's a DLL GraphicsCaptureHook that get access to GTAV process. It shares memory back to here.
     String strFileMapName;
     strFileMapName << TEXTURE_MEMORY << UIntString(info.mapID);
 
