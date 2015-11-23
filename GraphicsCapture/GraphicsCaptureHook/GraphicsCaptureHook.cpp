@@ -233,6 +233,32 @@ UINT InitializeSharedMemoryGPUCapture(SharedTexData **texData)
     return sharedMemoryIDCounter;
 }
 
+UINT InitializeSharedMemoryGPUCaptureDepth(SharedTexData **texDataDepth)
+{
+    int totalSize = sizeof(SharedTexData);
+
+    wstringstream strName;
+    strName << SHARED_CPU_MEMORY; // << ++sharedMemoryIDCounter;
+    hFileMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, totalSize, strName.str().c_str());
+    if(!hFileMap)
+    {
+	    return 0;
+    }
+
+    lpSharedMemory = (LPBYTE)MapViewOfFile(hFileMap, FILE_MAP_ALL_ACCESS, 0, 0, totalSize);
+    if(!lpSharedMemory)
+    {
+        CloseHandle(hFileMap);
+        hFileMap = NULL;
+        return 0;
+    }
+
+    *texDataDepth = (SharedTexData*)lpSharedMemory;
+    (*texDataDepth)->frameTime = 0;
+
+    return sharedMemoryIDCounter;
+}
+
 void DestroySharedMemory()
 {
     if(lpSharedMemory && hFileMap)

@@ -18,6 +18,8 @@
 
 
 #include "GraphicsCapture.h"
+#include <iostream>
+#include <fstream>
 
 
 typedef HANDLE(WINAPI *CRTPROC)(HANDLE, LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
@@ -449,7 +451,8 @@ BOOL CALLBACK GraphicsCaptureFindWindow(HWND hwnd, LPARAM lParam)
 
 void GraphicsCaptureSource::AttemptCapture()
 {
-    OSDebugOut(TEXT("attempting to capture..\n"));
+    // cq this seems important for getting the hwnd object, need to see how strWindowClass is populated
+	OSDebugOut(TEXT("attempting to capture..\n"));
 
     if (scmpi(strWindowClass, L"dwm") == 0)
     {
@@ -540,7 +543,7 @@ void GraphicsCaptureSource::AttemptCapture()
             if (processName[0])
             {
                 wchar_t *fileName = srchr(processName, '\\');
-                Log(L"Trying to hook process: %s", (fileName ? fileName+1 : processName));
+                Log(L"Trying to hook process: %s", (fileName ? fileName+1 : processName)); // +		processName	0x0014e28c L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V\\GTA5.exe"	wchar_t[260]
             }
             scpy_n(lastProcessName, processName, MAX_PATH-1);
         }
@@ -862,10 +865,24 @@ void RoundVect2(Vect2 &v)
     v.y = float(round(v.y));
 }
 
+bool cq_shouldWriteFile = true;
+
 void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 {
     if(capture)
     {
+		if (cq_shouldWriteFile)
+		{
+			std::ofstream myfile;
+			myfile.open("depth.txt");
+			myfile << "Writing this to a file.\n";
+			myfile << "Writing this to a file.\n";
+			myfile << "Writing this to a file.\n";
+			myfile << "Writing this to a file.\n";
+			myfile.close();
+			cq_shouldWriteFile = false;
+		}
+
         Shader *lastShader = GetCurrentPixelShader();
 
         float fGamma = float(-(gamma-100) + 100) * 0.01f;

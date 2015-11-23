@@ -23,7 +23,7 @@
 #include <D3D11.h>
 #include "DXGIStuff.h"
 
-
+#include <fstream>
 
 void SetupD3D11 (IDXGISwapChain *swap);
 void SetupD3D101(IDXGISwapChain *swap);
@@ -37,6 +37,11 @@ void DoD3D11Capture (IDXGISwapChain *swap);
 void DoD3D101Capture(IDXGISwapChain *swap);
 void DoD3D10Capture (IDXGISwapChain *swap);
 
+void saveDepthResource(ID3D11Resource* pResource);
+void setFirstDepthHook(bool val);
+void setDepthViewTarget(int target);
+void clearDepthResources();
+
 typedef HRESULT (WINAPI *CREATEDXGIFACTORYPROC)(REFIID riid, void **ppFactory);
 typedef void (*DOCAPTUREPROC)(IDXGISwapChain*);
 typedef void (*DOCLEARPROC)();
@@ -49,6 +54,27 @@ DOCLEARPROC   clearProc = NULL;
 
 extern LPVOID lpCurrentSwap;
 extern LPVOID lpCurrentDevice;
+
+UINT currentWidth = 0;
+UINT currentHeight = 0;
+
+UINT depthViewLimitLow = 3;
+UINT depthViewLimitHigh = 8;
+UINT depthViewTarget = 0;
+
+float * getDepthsAsFloats(unsigned height, unsigned width, BYTE* depths);
+void copyDepthResources(IDXGISwapChain *swap);
+ID3D11Texture2D *pDepthBufferCopy;     // cq trying to get at depth buffer with CPU / CUDA
+
+string GetActiveWindowTitle()
+{
+	wchar_t wnd_title[256];
+	HWND hwnd=GetForegroundWindow(); // get handle of currently active window
+	GetWindowText(hwnd, wnd_title, sizeof(wnd_title));
+	wstring ws(wnd_title);
+	string str(ws.begin(), ws.end());
+	return str;
+}
 
 void SetupDXGIStuff(IDXGISwapChain *swap)
 {
@@ -80,6 +106,14 @@ void SetupDXGIStuff(IDXGISwapChain *swap)
         {
             logOutput << CurrentTimeString() << "DXGI: Found D3D 11" << endl;
             SetupD3D11(swap);
+
+//			DXGI_SWAP_CHAIN_DESC scd;
+//			if((swap->GetDesc(&scd)) == S_OK)
+//			{
+//				currentHeight = scd.BufferDesc.Height; // cq
+//				currentWidth = scd.BufferDesc.Width;   // cq
+//			}
+
             captureProc = DoD3D11Capture;
             clearProc   = ClearD3D11Data;
         }
@@ -100,8 +134,22 @@ void SetupDXGIStuff(IDXGISwapChain *swap)
     bTargetAcquired = true;
 }
 
-typedef HRESULT(STDMETHODCALLTYPE *DXGISwapResizeBuffersHookPROC)(IDXGISwapChain *swap, UINT bufferCount, UINT width, UINT height, DXGI_FORMAT giFormat, UINT flags);
+int createDepthViewCount = 0;
+void readDepthViewLimits()
+{
+	createDepthViewCount = 0;
+	std::ifstream infile("depthViewLimits.txt");
+	
+	int a, b, c;
+	infile >> a >> b >> c;
+	depthViewLimitLow = a;
+	depthViewLimitHigh = b;
+	depthViewTarget = c;
+}
 
+bool cqOBSCreateDepthhooked = false;
+
+typedef HRESULT(STDMETHODCALLTYPE *DXGISwapResizeBuffersHookPROC)(IDXGISwapChain *swap, UINT bufferCount, UINT width, UINT height, DXGI_FORMAT giFormat, UINT flags);
 HRESULT STDMETHODCALLTYPE DXGISwapResizeBuffersHook(IDXGISwapChain *swap, UINT bufferCount, UINT width, UINT height, DXGI_FORMAT giFormat, UINT flags)
 {
     if(clearProc)
@@ -114,6 +162,11 @@ HRESULT STDMETHODCALLTYPE DXGISwapResizeBuffersHook(IDXGISwapChain *swap, UINT b
     bTargetAcquired = false;
 
 #if OLDHOOKS
+	readDepthViewLimits();
+	cqOBSCreateDepthhooked = false;
+	createDepthViewCount = 0;
+	clearDepthResources();
+
     giswapResizeBuffers.Unhook();
     HRESULT hRes = swap->ResizeBuffers(bufferCount, width, height, giFormat, flags);
     giswapResizeBuffers.Rehook();
@@ -124,15 +177,45 @@ HRESULT STDMETHODCALLTYPE DXGISwapResizeBuffersHook(IDXGISwapChain *swap, UINT b
     return hRes;
 }
 
-typedef HRESULT(STDMETHODCALLTYPE *DXGISwapPresentHookPROC)(IDXGISwapChain *swap, UINT syncInterval, UINT flags);
 
+typedef HRESULT(STDMETHODCALLTYPE *DXGISwapPresentHookPROC)(IDXGISwapChain *swap, UINT syncInterval, UINT flags);
 HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInterval, UINT flags)
 {
     if(lpCurrentSwap == NULL && !bTargetAcquired)
-        SetupDXGIStuff(swap);
+    {
+		SetupDXGIStuff(swap);
+    }
 
     if ((flags & DXGI_PRESENT_TEST) == 0 && lpCurrentSwap == swap && captureProc)
-        (*captureProc)(swap);
+    {
+		if (cqOBSCreateDepthhooked) 
+		{
+			copyDepthResources(swap);
+		}
+		(*captureProc)(swap);
+
+		if(GetActiveWindowTitle() == "Grand Theft Auto V")
+		{
+			// This structure will be used to create the keyboard
+			// input event.
+			INPUT ip;
+
+			// Set up a generic keyboard event.
+			ip.type = INPUT_KEYBOARD;
+			ip.ki.wScan = 0; // hardware scan code for key
+			ip.ki.time = 0;
+			ip.ki.dwExtraInfo = 0;
+
+			// Press the "A" key
+			ip.ki.wVk = 0x41; // virtual-key code for the "a" key
+			ip.ki.dwFlags = 0; // 0 for key press
+			SendInput(1, &ip, sizeof(INPUT));
+
+			// Release the "A" key
+//			ip.ki.dwFlags = KEYEVENTF_KEYUP; // KEYEVENTF_KEYUP for key release
+//			SendInput(1, &ip, sizeof(INPUT));
+		}
+    }
 
 #if OLDHOOKS
     giswapPresent.Unhook();
@@ -145,10 +228,78 @@ HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInt
     return hRes;
 }
 
+typedef void (*DOCREATEDEPTHPROC)(ID3D11Device*);
+HookData devCreateDepthViewHook;
+
+typedef HRESULT(STDMETHODCALLTYPE *D3D11CreateDepthHookPROC)(ID3D11Device *device, ID3D11Resource *pResource,
+	const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView);
+HRESULT STDMETHODCALLTYPE D3D11CreateDepthHook(ID3D11Device *device, ID3D11Resource *pResource,
+		const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView)
+{
+	createDepthViewCount += 1;
+	if( createDepthViewCount >= depthViewLimitLow && createDepthViewCount < depthViewLimitHigh )
+	{
+		saveDepthResource(pResource);
+		if(createDepthViewCount == (depthViewLimitHigh - 1))
+		{
+			cqOBSCreateDepthhooked = true;
+			setFirstDepthHook(true);
+		}
+	}
+
+	devCreateDepthViewHook.Unhook();
+	HRESULT hRes = device->CreateDepthStencilView(pResource, pDesc, ppDepthStencilView);
+	devCreateDepthViewHook.Rehook();
+	return hRes;
+}
+
+
+//void copyDepthResources(IDXGISwapChain *swap)
+//{
+//	ID3D11Device* dev = NULL;
+//	HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&dev);
+//	ID3D11DeviceContext *devcon;
+//	dev->GetImmediateContext(&devcon);
+//
+//	D3D11_MAPPED_SUBRESOURCE mappedResource;
+//
+//	if FAILED( devcon->Map(pDepthBufferCopy, 0, D3D11_MAP_READ, 0, &mappedResource))
+//	{
+//		
+////		logOutput << "Could not map depth buffer copy" << endl;
+//		return;
+//	}
+//
+//	BYTE* pYourBytes = (BYTE*)mappedResource.pData;
+//	auto uiPitch = mappedResource.RowPitch;
+//
+//
+//	auto BYTES_IN_DEXEL = 4; // 32 bits
+//	auto line_width_bytes = currentWidth * BYTES_IN_DEXEL;
+//
+////		BYTE* depths = new BYTE[length];
+//
+//	float * fDepths = getDepthsAsFloats(currentHeight, currentWidth, pYourBytes);
+//
+////		std::ofstream depthFile;
+////		depthFile.open("cqDepthFloat.txt");
+////		auto floatWidth = scd.BufferDesc.Height * scd.BufferDesc.Width;
+////		for(auto i = 0; i < floatWidth; i++)
+////		{
+////			depthFile << fDepths[i] << " ";
+////		}
+////		depthFile.close();
+//	
+//	delete fDepths;
+//	delete pYourBytes;
+//	swap->Release();
+//	dev->Release();
+//	devcon->Release();
+//}
+
 typedef HRESULT (WINAPI *D3D10CREATEPROC)(IDXGIAdapter*, D3D10_DRIVER_TYPE, HMODULE, UINT, UINT, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**, IUnknown**);
 typedef HRESULT (WINAPI *D3D101CREATEPROC)(IDXGIAdapter*, D3D10_DRIVER_TYPE, HMODULE, UINT, D3D10_FEATURE_LEVEL1, UINT, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**, IUnknown**);
 typedef HRESULT (WINAPI*D3D11CREATEPROC)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT, D3D_FEATURE_LEVEL*, UINT, UINT, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**, IUnknown**, D3D_FEATURE_LEVEL*, IUnknown**);
-
 
 IDXGISwapChain* CreateDummySwap()
 {
@@ -291,10 +442,18 @@ bool InitDXGICapture()
         giswapPresent.Hook((FARPROC)*(vtable+(32/4)), (FARPROC)DXGISwapPresentHook);
         giswapResizeBuffers.Hook((FARPROC)*(vtable+(52/4)), (FARPROC)DXGISwapResizeBuffersHook);
 
+		ID3D11Device* dev = NULL;
+		HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&dev);
+		UPARAM *vtableDev = *(UPARAM**)dev;
+		devCreateDepthViewHook.Hook((FARPROC)*(vtableDev+(10)), (FARPROC)D3D11CreateDepthHook);
+
+
         SafeRelease(swap);
+        SafeRelease(dev);
 
         giswapPresent.Rehook();
         giswapResizeBuffers.Rehook();
+		devCreateDepthViewHook.Rehook();
     }
 
     return bSuccess;
@@ -308,6 +467,9 @@ void FreeDXGICapture()
 {
     giswapPresent.Unhook();
     giswapResizeBuffers.Unhook();
+	devCreateDepthViewHook.Unhook();
+
+	cqOBSCreateDepthhooked = false;
 
     ClearD3D10Data();
     ClearD3D101Data();

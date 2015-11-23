@@ -190,6 +190,7 @@ BOOL WINAPI InjectLibrary(HANDLE hProcess, const wchar_t *pDLL, DWORD dwLen)
     procAddress = (UPARAM)GetProcAddress(hK32, pLLStr);
     if (!procAddress) goto end;
 
+	// TODO cq find out why failing here when called directly with arguments.
     hThread = (*pCreateRemoteThread)(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)procAddress,
         pStr, 0, &dwTemp);
     if (!hThread) goto end;

@@ -34,7 +34,10 @@
 #define TEXTURE_MUTEX2          TEXT("OBSTextureMutex2")
 
 #define INFO_MEMORY             TEXT("Local\\OBSInfoMemory")
+// TODO cq make a depthMemory slot
 #define TEXTURE_MEMORY          TEXT("Local\\OBSTextureMemory")
+
+#define SHARED_CPU_MEMORY       TEXT("Local\\Game2SensorMemory")
 
 #define OBS_KEEPALIVE_EVENT     TEXT("OBS_KeepAlive")
 
@@ -63,6 +66,7 @@ struct SharedTexData
 {
     LONGLONG    frameTime;
     DWORD       texHandle;
+	DWORD       depthTexHandle;
 };
 
 struct CaptureInfo

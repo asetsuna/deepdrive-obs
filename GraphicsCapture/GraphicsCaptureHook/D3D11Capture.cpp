@@ -23,6 +23,9 @@
 #include <D3D11.h>
 #include "DXGIStuff.h"
 
+#include <sys/stat.h>
+#include <set>
+
 
 FARPROC                 oldD3D11Release = NULL;
 FARPROC                 newD3D11Release = NULL;
@@ -32,6 +35,7 @@ CaptureInfo             d3d11CaptureInfo;
 extern LPVOID           lpCurrentSwap;
 extern LPVOID           lpCurrentDevice;
 SharedTexData           *texData;
+SharedTexData           *texDataDepth;
 extern DWORD            curCapture;
 extern BOOL             bHasTextures;
 extern BOOL             bIsMultisampled;
@@ -39,16 +43,184 @@ extern LONGLONG         lastTime;
 
 extern DXGI_FORMAT      dxgiFormat;
 ID3D11Resource          *copyTextureGame = NULL;
+ID3D11Resource          *copyTextureGame2 = NULL;
 HANDLE                  sharedHandle = NULL;
-
+HANDLE                  sharedHandle2 = NULL;
+HANDLE                  sharedDepthHandle = NULL;
 
 extern bool bD3D101Hooked;
+
+ID3D11RenderTargetView *cq_backbuffer;    // cq the pointer to our back buffer
+ID3D11DepthStencilView *cq_zbuffer;       // cq the pointer to our depth buffer
+
+ID3D11Resource  *cq_pDepthBuffer;         // cq trying to get at depth buffer with CPU / CUDA
+ID3D11Texture2D *cq_pDepthBufferCopy;     // cq trying to get at depth buffer with CPU / CUDA
+set<ID3D11Resource*> cq_depthResources;
+void copyDepthResources(IDXGISwapChain *swap);
+
+bool createSharedDepthHandle();
+
+int cq_height;
+int cq_width;
+
+bool isFirstDepthHook = true;
+
+float* getDepthsAsFloats(unsigned height, unsigned width, BYTE* depths);
+
+void setFirstDepthHook(bool val)
+{
+	isFirstDepthHook = val;
+}
+
+void saveDepthResource(ID3D11Resource* pResource)
+{
+	cq_depthResources.insert(pResource);
+}
+
+int depthViewTarget = 0;
+void setDepthViewTarget(int target)
+{
+	depthViewTarget = target;
+}
+
+inline bool file_exists (const std::string& name) {
+  struct stat buffer;   
+  return (stat (name.c_str(), &buffer) == 0); 
+}
+
+bool shouldWriteDepthTOFile = false;
+bool shouldCreateSharedMem = true;
+bool cq_shouldWriteFile = false;
+std::string depthFileName = "cqDepthFloat.txt";
+
+void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, string filename)
+{
+    ID3D11Device* device = NULL;
+    HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&device);
+
+    ID3D11DeviceContext *devcon;
+    device->GetImmediateContext(&devcon);
+
+	if(isFirstDepthHook)
+	{
+		// create the depth buffer copy texture
+		D3D11_TEXTURE2D_DESC texdCopy;
+		ZeroMemory(&texdCopy, sizeof(texdCopy));
+    
+		texdCopy.Width = cq_width;
+		texdCopy.Height = cq_height;
+		texdCopy.ArraySize = 1;
+		texdCopy.MipLevels = 1;
+		texdCopy.SampleDesc.Count = 1; // Must have BindFlags set if greater than 1.
+		texdCopy.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+
+		if(shouldWriteDepthTOFile)
+		{
+			// CPU READ
+			texdCopy.BindFlags = NULL; // Must be NULL to read to file with CPU
+			texdCopy.Usage = D3D11_USAGE_STAGING; // Must be staging to read from CPU, but means BindFlags cannot be set.
+			texdCopy.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		} else
+		{
+			// GPU SHARE
+			texdCopy.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			texdCopy.Usage = D3D11_USAGE_DEFAULT; // Must be staging to read from CPU, but means BindFlags cannot be set.
+			texdCopy.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Cannot be set for CPU reading
+		}
+		device->CreateTexture2D(&texdCopy, NULL, &cq_pDepthBufferCopy);
+		isFirstDepthHook = false;
+	} 
+
+    devcon->CopyResource(cq_pDepthBufferCopy, cq_savedDepthResource);
+
+    if(shouldCreateSharedMem && createSharedDepthHandle() && sharedHandle2 != NULL)
+    {
+        UINT mapId = InitializeSharedMemoryGPUCaptureDepth(&texDataDepth);
+        texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
+		texDataDepth->texHandle = (DWORD)sharedHandle2;
+        shouldCreateSharedMem = false;
+    }
+
+    if (shouldWriteDepthTOFile) {
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+
+        HRESULT mapResult = devcon->Map(cq_pDepthBufferCopy, 0, D3D11_MAP_READ, 0, &mappedResource);
+
+        BYTE *pYourBytes = (BYTE *) mappedResource.pData;
+        unsigned int uiPitch = mappedResource.RowPitch;
+
+        float *fDepths = getDepthsAsFloats(cq_height, cq_width, pYourBytes);
+
+        std::ofstream myfile;
+        myfile.open(filename);
+        auto floatWidth = cq_height * cq_width;
+        for (auto i = 0; i < floatWidth; i++) {
+            myfile << fDepths[i] << " ";
+        }
+        myfile.close();
+        cq_shouldWriteFile = false;
+        shouldWriteDepthTOFile = false;
+        devcon->Unmap(cq_pDepthBufferCopy, 0);
+    }
+
+//    cq_pDepthBufferCopy->Release();
+    devcon->Release();
+    device->Release();
+}
+
+void copyDepthResources(IDXGISwapChain *swap)
+{
+	auto i = 0;
+	for (auto &resource : cq_depthResources)
+	{
+		string filename = depthFileName + to_string(i);
+		if( i == depthViewTarget ) // || file_exists(filename) == false )
+		{
+			copyDepth(swap, resource, filename);
+		}
+		i++;
+	}
+}
+
+void clearDepthResources()
+{
+	cq_depthResources.clear();
+}
+
+float* getDepthsAsFloats(unsigned height, unsigned width, BYTE* depths)
+{
+	static float* fDepths;
+	int fDepthsLength = height * width;
+	fDepths = new float[fDepthsLength];
+	for (int j = 0; j < fDepthsLength; j++)
+	{
+		// initialize to infinite depth
+		fDepths[j] = 0.0;
+	}
+
+	for (int y = 0; y < height; y++) 
+	{
+		for (int x = 0; x < width; x++) 
+		{
+			float f;
+			int fDepthsIndex = y * width + x;
+			int i = fDepthsIndex * 8; // 8 bytes per DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS (top 4 are 32 bit floating point depth)
+			unsigned char b[] = { depths[i], depths[i + 1], depths[i + 2], depths[i + 3] };
+			memcpy(&f, &b, sizeof(f));
+			fDepths[fDepthsIndex] = f;
+		}
+	}
+	return fDepths;
+}
+
 
 void ClearD3D11Data()
 {
     bHasTextures = false;
     texData = NULL;
+//    texDataDepth = NULL;
     sharedHandle = NULL;
+//	sharedDepthHandle = NULL;
 
     SafeRelease(copyTextureGame);
 
@@ -68,6 +240,29 @@ void SetupD3D11(IDXGISwapChain *swapChain)
     if(SUCCEEDED(swapChain->GetDesc(&scd)))
     {
         d3d11CaptureInfo.format = ConvertGIBackBufferFormat(scd.BufferDesc.Format);
+
+		cq_height = scd.BufferDesc.Height; // cq
+		cq_width = scd.BufferDesc.Width;   // cq
+
+//		// create the depth buffer copy texture
+//		D3D11_TEXTURE2D_DESC texdCopy;
+//		ZeroMemory(&texdCopy, sizeof(texdCopy));
+//
+//		texdCopy.Width = cq_height;
+//		texdCopy.Height = cq_width;
+//		texdCopy.ArraySize = 1;
+//		texdCopy.MipLevels = 1;
+//		texdCopy.SampleDesc.Count = 1; // Must have BindFlags set if greater than 1.
+//		texdCopy.Format = DXGI_FORMAT_R32_TYPELESS; 
+//		texdCopy.BindFlags = NULL;
+//		texdCopy.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+//		texdCopy.Usage = D3D11_USAGE_STAGING; // Must be staging to read from CPU, but means BindFlags cannot be set.
+//
+//		ID3D11Device* dev = NULL;
+//		HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&dev);
+//		hRes = dev->CreateTexture2D(&texdCopy, NULL, &cq_pDepthBufferCopy);
+
+
         if(d3d11CaptureInfo.format != GS_UNKNOWNFORMAT)
         {
             if( dxgiFormat                   != scd.BufferDesc.Format ||
@@ -94,6 +289,91 @@ void SetupD3D11(IDXGISwapChain *swapChain)
 
 typedef HRESULT (WINAPI *CREATEDXGIFACTORY1PROC)(REFIID riid, void **ppFactory);
 
+
+bool createSharedDepthHandle()
+{
+
+	// convert texture to d3d11 resource
+	if (cq_pDepthBufferCopy->QueryInterface(__uuidof(ID3D11Resource), (void**)&cq_pDepthBufferCopy) != S_OK)
+	{
+		//			RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: d3d11Tex->QueryInterface(ID3D11Resource) failed, result = " << UINT(hErr) << endl;
+		//			cq_pDepthBufferCopy->Release();
+		return false;
+	}
+
+	// convert d3d11 resource to more general dxgi resource
+	IDXGIResource *res2;
+	if (cq_pDepthBufferCopy->QueryInterface(__uuidof(IDXGIResource), (void**)&res2) != S_OK)
+	{
+		//			RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: d3d11DepthTex->QueryInterface(IID_IDXGIResource) failed, result = " << UINT(hErr) << endl;
+		//			d3d11DepthTex->Release();
+		return false;
+	}
+
+	// get shared handle from dxgi resource
+	if (res2->GetSharedHandle(&sharedDepthHandle) != S_OK)
+	{
+		//			RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: res2->GetSharedDepthHandle failed, result = " << UINT(hErr) << endl;
+		//			d3d11DepthTex->Release();
+		res2->Release();
+		return false;
+	}
+
+	res2->Release();
+	return true;
+}
+
+bool setSharedHandleGame2Sensor(ID3D11Device *device)
+{
+	HRESULT hErr;
+
+    D3D11_TEXTURE2D_DESC texGameDesc;
+    ZeroMemory(&texGameDesc, sizeof(texGameDesc));
+    texGameDesc.Width               = d3d11CaptureInfo.cx;
+    texGameDesc.Height              = d3d11CaptureInfo.cy;
+    texGameDesc.MipLevels           = 1;
+    texGameDesc.ArraySize           = 1;
+    texGameDesc.Format              = dxgiFormat;
+    texGameDesc.SampleDesc.Count    = 1;
+    texGameDesc.BindFlags           = D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+    texGameDesc.Usage               = D3D11_USAGE_DEFAULT;
+    texGameDesc.MiscFlags           = D3D11_RESOURCE_MISC_SHARED;
+
+    ID3D11Texture2D *d3d11Tex;
+    if(FAILED(hErr = device->CreateTexture2D(&texGameDesc, NULL, &d3d11Tex)))
+    {
+        RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: creation of intermediary texture Game2Sensor failed, result = " << UINT(hErr) << endl;
+        return false;
+    }
+
+    if(FAILED(hErr = d3d11Tex->QueryInterface(__uuidof(ID3D11Resource), (void**)&copyTextureGame2)))
+    {
+        RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: d3d11Tex->QueryInterface(ID3D11Resource) Game2Sensor failed, result = " << UINT(hErr) << endl;
+        d3d11Tex->Release();
+        return false;
+    }
+
+    IDXGIResource *res;
+    if(FAILED(hErr = d3d11Tex->QueryInterface(IID_IDXGIResource, (void**)&res)))
+    {
+        RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: d3d11Tex->QueryInterface(IID_IDXGIResource) Game2Sensor failed, result = " << UINT(hErr) << endl;
+        d3d11Tex->Release();
+        return false;
+    }
+
+    if(FAILED(hErr = res->GetSharedHandle(&sharedHandle2)))
+    {
+        RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D11Hook: res->GetSharedHandle2 failed, result = " << UINT(hErr) << endl;
+        d3d11Tex->Release();
+        res->Release();
+        return false;
+    }
+
+	d3d11Tex->Release();
+    res->Release();
+
+    return true;
+}
 
 bool DoD3D11Hook(ID3D11Device *device)
 {
@@ -203,6 +483,101 @@ void DoD3D11Capture(IDXGISwapChain *swap)
         ID3D11DeviceContext *context;
         device->GetImmediateContext(&context);
 
+
+		// CQ added ---------------------------------------
+		// 
+		// ID3D11Texture2D -> 
+//		ID3D11DepthStencilState* currentStencilState = nullptr;
+//		UINT stencilRef = 0;
+//		context->OMGetDepthStencilState(&currentStencilState, &stencilRef);
+//
+//		// TODO cq get the depth buffer here
+//
+//		context->CopyResource(pDepthBufferCopy, pDepthBuffer);
+//
+//		D3D11_MAPPED_SUBRESOURCE mappedResource;
+//
+//		HRESULT mapResult = context->Map(pDepthBufferCopy, 0, D3D11_MAP_READ, 0, &mappedResource);
+//
+//		BYTE* pYourBytes = (BYTE*)mappedResource.pData;
+//		unsigned int uiPitch = mappedResource.RowPitch;
+//		 end CQ ---------------------------
+//		 CQ Start custom depth buffer
+//		 create the depth buffer texture
+//		D3D11_TEXTURE2D_DESC texd;
+//		ZeroMemory(&texd, sizeof(texd));
+//
+//		texd.Width = cq_width;
+//		texd.Height = cq_height;
+//		texd.ArraySize = 1;
+//		texd.MipLevels = 1;
+//		texd.SampleDesc.Count = 1;
+//		texd.Format = DXGI_FORMAT_D32_FLOAT;
+//		texd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+//
+//		device->CreateTexture2D(&texd, NULL, &cq_pDepthBuffer);
+//		// create the depth buffer copy texture
+//		D3D11_TEXTURE2D_DESC texdCopy;
+//		ZeroMemory(&texdCopy, sizeof(texdCopy));
+//
+//		texdCopy.Width = cq_width;
+//		texdCopy.Height = cq_height;
+//		texdCopy.ArraySize = 1;
+//		texdCopy.MipLevels = 1;
+//		texdCopy.SampleDesc.Count = 1; // Must have BindFlags set if greater than 1.
+//		texdCopy.Format = DXGI_FORMAT_R32_TYPELESS;
+//		texdCopy.BindFlags = NULL;
+//		texdCopy.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+//		texdCopy.Usage = D3D11_USAGE_STAGING; // Must be staging to read from CPU, but means BindFlags cannot be set.
+//
+//		//	pDepthBuffer->GetPrivateData()
+//		device->CreateTexture2D(&texdCopy, NULL, &cq_pDepthBufferCopy);
+//		// create the depth buffer
+//		D3D11_DEPTH_STENCIL_VIEW_DESC dsvd;
+//		ZeroMemory(&dsvd, sizeof(dsvd));
+//
+//		dsvd.Format = DXGI_FORMAT_D32_FLOAT;
+//		dsvd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DMS;
+//
+//		device->CreateDepthStencilView(cq_pDepthBuffer, &dsvd, &cq_zbuffer);
+//		//	pDepthBuffer->Release();
+//
+//		// get the address of the back buffer
+//		ID3D11Texture2D *pBackBuffer;
+//		swap->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
+//
+//		// use the back buffer address to create the render target
+//		device->CreateRenderTargetView(pBackBuffer, NULL, &cq_backbuffer);
+//		pBackBuffer->Release();
+//
+//		// set the render target as the back buffer
+//		context->OMSetRenderTargets(1, &cq_backbuffer, cq_zbuffer);
+//		 CQ  End custom depth buffer
+//		 CQ start capture test to file
+//		context->CopyResource(cq_pDepthBufferCopy, cq_pDepthBuffer);
+//
+//		D3D11_MAPPED_SUBRESOURCE mappedResource;
+//
+//		HRESULT mapResult = context->Map(cq_pDepthBufferCopy, 0, D3D11_MAP_READ, 0, &mappedResource);
+//
+//		BYTE* pYourBytes = (BYTE*)mappedResource.pData;
+//		unsigned int uiPitch = mappedResource.RowPitch;
+//
+//		if (cq_shouldWriteFile)
+//		{
+//			std::ofstream myfile;
+//			myfile.open("cqdepth.txt");
+//			for (int i = 0; i < uiPitch; i++)
+//			{
+//				// Write the first line of dexels
+//				myfile << pYourBytes[i];
+//			}
+//			myfile << "\r\n";
+//			myfile.close();
+//			cq_shouldWriteFile = false;
+//		}
+		//// CQ end capture test to file
+
         if(bCapturing && bStopRequested)
         {
             RUNEVERYRESET logOutput << CurrentTimeString() << "stop requested, terminating d3d11 capture" << endl;
@@ -224,6 +599,7 @@ void DoD3D11Capture(IDXGISwapChain *swap)
             if(dxgiFormat && hwndOBS)
             {
                 BOOL bSuccess = DoD3D11Hook(device);
+				BOOL bSuccess2 = setSharedHandleGame2Sensor(device);
 
                 if(bSuccess)
                 {
