@@ -57,6 +57,7 @@ ID3D11Resource  *cq_pDepthBuffer;         // cq trying to get at depth buffer wi
 ID3D11Texture2D *cq_pDepthBufferCopy;     // cq trying to get at depth buffer with CPU / CUDA
 set<ID3D11Resource*> cq_depthResources;
 void copyDepthResources(IDXGISwapChain *swap);
+bool setSharedHandleGame2Sensor(ID3D11Device *device);
 
 bool createSharedDepthHandle();
 
@@ -133,13 +134,30 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
 
     devcon->CopyResource(cq_pDepthBufferCopy, cq_savedDepthResource);
 
-    if(shouldCreateSharedMem && createSharedDepthHandle() && sharedHandle2 != NULL)
+	ID3D11Resource *backBuffer = NULL;
+
+
+    if(shouldCreateSharedMem && sharedHandle != NULL && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
     {
         UINT mapId = InitializeSharedMemoryGPUCaptureDepth(&texDataDepth);
         texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
 		texDataDepth->texHandle = (DWORD)sharedHandle2;
         shouldCreateSharedMem = false;
     }
+
+    if(shouldCreateSharedMem == false && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
+        {
+            if(bIsMultisampled)
+            {
+                devcon->ResolveSubresource(copyTextureGame2, 0, backBuffer, 0, dxgiFormat);
+            } 
+			
+			else
+			{
+                devcon->CopyResource(copyTextureGame2, backBuffer);	
+			}
+            backBuffer->Release();
+	}
 
     if (shouldWriteDepthTOFile) {
         D3D11_MAPPED_SUBRESOURCE mappedResource;
@@ -223,6 +241,7 @@ void ClearD3D11Data()
 //	sharedDepthHandle = NULL;
 
     SafeRelease(copyTextureGame);
+    SafeRelease(copyTextureGame2);
 
     DestroySharedMemory();
     keepAliveTime = 0;
@@ -599,7 +618,6 @@ void DoD3D11Capture(IDXGISwapChain *swap)
             if(dxgiFormat && hwndOBS)
             {
                 BOOL bSuccess = DoD3D11Hook(device);
-				BOOL bSuccess2 = setSharedHandleGame2Sensor(device);
 
                 if(bSuccess)
                 {
@@ -677,9 +695,14 @@ void DoD3D11Capture(IDXGISwapChain *swap)
                             if(SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
                             {
                                 if(bIsMultisampled)
-                                    context->ResolveSubresource(copyTextureGame, 0, backBuffer, 0, dxgiFormat);
+                                {
+	                                context->ResolveSubresource(copyTextureGame, 0, backBuffer, 0, dxgiFormat);
+                                }
+
                                 else
-                                    context->CopyResource(copyTextureGame, backBuffer);
+								{
+								    context->CopyResource(copyTextureGame, backBuffer);
+								}
 
                                 RUNEVERYRESET logOutput << CurrentTimeString() << "successfully capturing d3d11 frames via GPU" << endl;
 
