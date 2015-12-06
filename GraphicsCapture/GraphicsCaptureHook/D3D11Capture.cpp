@@ -97,6 +97,7 @@ std::string depthFileName = "cqDepthFloat.txt";
 
 void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, string filename)
 {
+//    logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq copyingDepth cqcqcqcqcqcqcqcq" << endl;
     ID3D11Device* device = NULL;
     HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&device);
 
@@ -137,15 +138,15 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
 	
 	ID3D11Resource *backBuffer = NULL;
 
-
-    if(shouldCreateSharedMem && sharedHandle2 != NULL && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
+//    logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq trying to share mem cqcqcqcqcqcqcqcq" << endl;
+    if(shouldCreateSharedMem && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
     {
         UINT mapId = InitializeSharedMemoryGPUCaptureDepth(&texDataDepth);
         texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
 		texDataDepth->texHandle = (DWORD)sharedHandle2;
         shouldCreateSharedMem = false;
 		createdSharedMem = true;
-		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared mem cqcqcqcqcqcqcqcq << endl";
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared mem cqcqcqcqcqcqcqcq" << endl;
     }
 
     if(createdSharedMem && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
@@ -244,7 +245,7 @@ void ClearD3D11Data()
 //	sharedDepthHandle = NULL;
 
     SafeRelease(copyTextureGame);
-    SafeRelease(copyTextureGame2);
+//    SafeRelease(copyTextureGame2);
 
     DestroySharedMemory();
     keepAliveTime = 0;
@@ -643,6 +644,7 @@ void DoD3D11Capture(IDXGISwapChain *swap)
                     SetEvent(hSignalReady);
 
                     logOutput << CurrentTimeString() << "DoD3D11Hook: success" << endl;
+					shouldCreateSharedMem = true;
                 }
                 else
                 {
