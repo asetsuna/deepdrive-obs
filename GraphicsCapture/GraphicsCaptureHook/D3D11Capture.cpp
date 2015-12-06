@@ -91,6 +91,7 @@ inline bool file_exists (const std::string& name) {
 
 bool shouldWriteDepthTOFile = false;
 bool shouldCreateSharedMem = true;
+bool createdSharedMem = false;
 bool cq_shouldWriteFile = false;
 std::string depthFileName = "cqDepthFloat.txt";
 
@@ -133,19 +134,21 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
 	} 
 
     devcon->CopyResource(cq_pDepthBufferCopy, cq_savedDepthResource);
-
+	
 	ID3D11Resource *backBuffer = NULL;
 
 
-    if(shouldCreateSharedMem && sharedHandle != NULL && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
+    if(shouldCreateSharedMem && sharedHandle2 != NULL && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
     {
         UINT mapId = InitializeSharedMemoryGPUCaptureDepth(&texDataDepth);
         texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
 		texDataDepth->texHandle = (DWORD)sharedHandle2;
         shouldCreateSharedMem = false;
+		createdSharedMem = true;
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared mem cqcqcqcqcqcqcqcq << endl";
     }
 
-    if(shouldCreateSharedMem == false && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
+    if(createdSharedMem && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
         {
             if(bIsMultisampled)
             {
