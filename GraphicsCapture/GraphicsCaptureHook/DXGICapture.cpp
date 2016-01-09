@@ -63,8 +63,9 @@ UINT depthViewLimitHigh = 8;
 UINT depthViewTarget = 0;
 
 float * getDepthsAsFloats(unsigned height, unsigned width, BYTE* depths);
-void copyDepthResources(IDXGISwapChain *swap);
+void copySensorResources(IDXGISwapChain *swap, bool shouldCopyDepth);
 ID3D11Texture2D *pDepthBufferCopy;     // cq trying to get at depth buffer with CPU / CUDA
+bool isCaptureDepthEnabled = false;
 
 string GetActiveWindowTitle()
 {
@@ -177,7 +178,6 @@ HRESULT STDMETHODCALLTYPE DXGISwapResizeBuffersHook(IDXGISwapChain *swap, UINT b
     return hRes;
 }
 
-
 typedef HRESULT(STDMETHODCALLTYPE *DXGISwapPresentHookPROC)(IDXGISwapChain *swap, UINT syncInterval, UINT flags);
 HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInterval, UINT flags)
 {
@@ -188,10 +188,18 @@ HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInt
 
     if ((flags & DXGI_PRESENT_TEST) == 0 && lpCurrentSwap == swap && captureProc)
     {
-		if (cqOBSCreateDepthhooked) 
+		if (isCaptureDepthEnabled)
 		{
-			copyDepthResources(swap);
+			if (cqOBSCreateDepthhooked)
+			{
+				copySensorResources(swap, true);
+			}
 		}
+		else
+		{
+			copySensorResources(swap, false);
+		}
+
 		(*captureProc)(swap);
 
 		if(GetActiveWindowTitle() == "Grand Theft Auto V")
@@ -236,12 +244,14 @@ typedef HRESULT(STDMETHODCALLTYPE *D3D11CreateDepthHookPROC)(ID3D11Device *devic
 HRESULT STDMETHODCALLTYPE D3D11CreateDepthHook(ID3D11Device *device, ID3D11Resource *pResource,
 		const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView)
 {
+	logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Trying to hook depth cqcqcqcqcqcqcqcq" << endl;
 	createDepthViewCount += 1;
 	if( createDepthViewCount >= depthViewLimitLow && createDepthViewCount < depthViewLimitHigh )
 	{
 		saveDepthResource(pResource);
 		if(createDepthViewCount == (depthViewLimitHigh - 1))
 		{
+			logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Depth hook successful cqcqcqcqcqcqcqcq" << endl;
 			cqOBSCreateDepthhooked = true;
 			setFirstDepthHook(true);
 		}

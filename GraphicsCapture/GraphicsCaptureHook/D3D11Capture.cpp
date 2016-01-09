@@ -56,7 +56,7 @@ ID3D11DepthStencilView *cq_zbuffer;       // cq the pointer to our depth buffer
 ID3D11Resource  *cq_pDepthBuffer;         // cq trying to get at depth buffer with CPU / CUDA
 ID3D11Texture2D *cq_pDepthBufferCopy;     // cq trying to get at depth buffer with CPU / CUDA
 set<ID3D11Resource*> cq_depthResources;
-void copyDepthResources(IDXGISwapChain *swap);
+void copySensorResources(IDXGISwapChain *swap, bool shouldCopyDepth);
 bool setSharedHandleGame2Sensor(ID3D11Device *device);
 
 bool createSharedDepthHandle();
@@ -91,65 +91,102 @@ inline bool file_exists (const std::string& name) {
 
 bool shouldWriteDepthTOFile = false;
 bool shouldCreateSharedMem = true;
-bool createdSharedMem = false;
 bool cq_shouldWriteFile = false;
 std::string depthFileName = "cqDepthFloat.txt";
+bool isFirstCopySensors = true;
+bool createdSharedMem = false;
 
-void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, string filename)
+bool createSharedMem(ID3D11Resource* cq_savedDepthResource, ID3D11Device* device)
 {
-//    logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq copyingDepth cqcqcqcqcqcqcqcq" << endl;
-    ID3D11Device* device = NULL;
+	if (cq_savedDepthResource)
+	{
+		if(createSharedDepthHandle())
+		{
+			logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq created shared depth handle cqcqcqcqcqcqcqcq" << endl;
+		}
+		else
+		{
+			logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq failed to create shared depth handle cqcqcqcqcqcqcqcq" << endl;
+			return false;
+		}
+	}
+
+	if (setSharedHandleGame2Sensor(device))
+	{
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq created shared camera handle cqcqcqcqcqcqcqcq" << endl;
+	}
+	else
+	{
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq failed to create shared camera handle cqcqcqcqcqcqcqcq" << endl;
+		return false;
+	}
+		
+	logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq trying to share mem cqcqcqcqcqcqcqcq" << endl;
+	UINT mapId = InitializeSharedMemoryGPUCaptureGame2Sensor(&texDataDepth);
+	texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
+	texDataDepth->texHandle = (DWORD)sharedHandle2;
+	shouldCreateSharedMem = false;
+	logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared mem cqcqcqcqcqcqcqcq" << endl;
+	return true;
+}
+
+void copySensors(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, string depthFilename)
+{
+	if (isFirstCopySensors)
+	{
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq copySensors called first time cqcqcqcqcqcqcqcq" << endl;
+		isFirstCopySensors = false;
+	}
+    ID3D11Device* device = nullptr;
     HRESULT hRes = swap->GetDevice(__uuidof(ID3D11Device), (void**)&device);
 
     ID3D11DeviceContext *devcon;
     device->GetImmediateContext(&devcon);
 
-	if(isFirstDepthHook)
+	if (cq_savedDepthResource)
 	{
-		// create the depth buffer copy texture
-		D3D11_TEXTURE2D_DESC texdCopy;
-		ZeroMemory(&texdCopy, sizeof(texdCopy));
-    
-		texdCopy.Width = cq_width;
-		texdCopy.Height = cq_height;
-		texdCopy.ArraySize = 1;
-		texdCopy.MipLevels = 1;
-		texdCopy.SampleDesc.Count = 1; // Must have BindFlags set if greater than 1.
-		texdCopy.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+		if (isFirstDepthHook)
+		{
+			// create the depth buffer copy texture
+			D3D11_TEXTURE2D_DESC texdCopy;
+			ZeroMemory(&texdCopy, sizeof(texdCopy));
 
-		if(shouldWriteDepthTOFile)
-		{
-			// CPU READ
-			texdCopy.BindFlags = NULL; // Must be NULL to read to file with CPU
-			texdCopy.Usage = D3D11_USAGE_STAGING; // Must be staging to read from CPU, but means BindFlags cannot be set.
-			texdCopy.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		} else
-		{
-			// GPU SHARE
-			texdCopy.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			texdCopy.Usage = D3D11_USAGE_DEFAULT; // Must be staging to read from CPU, but means BindFlags cannot be set.
-			texdCopy.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Cannot be set for CPU reading
+			texdCopy.Width = cq_width;
+			texdCopy.Height = cq_height;
+			texdCopy.ArraySize = 1;
+			texdCopy.MipLevels = 1;
+			texdCopy.SampleDesc.Count = 1; // Must have BindFlags set if greater than 1.
+			texdCopy.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+
+			if (shouldWriteDepthTOFile)
+			{
+				// CPU READ
+				texdCopy.BindFlags = NULL; // Must be NULL to read to file with CPU
+				texdCopy.Usage = D3D11_USAGE_STAGING; // Must be staging to read from CPU, but means BindFlags cannot be set.
+				texdCopy.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			}
+			else
+			{
+				// GPU SHARE
+				texdCopy.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				texdCopy.Usage = D3D11_USAGE_DEFAULT; // Must be staging to read from CPU, but means BindFlags cannot be set.
+				texdCopy.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // Cannot be set for CPU reading
+			}
+			device->CreateTexture2D(&texdCopy, NULL, &cq_pDepthBufferCopy);
+			isFirstDepthHook = false;
 		}
-		device->CreateTexture2D(&texdCopy, NULL, &cq_pDepthBufferCopy);
-		isFirstDepthHook = false;
-	} 
 
-    devcon->CopyResource(cq_pDepthBufferCopy, cq_savedDepthResource);
+		devcon->CopyResource(cq_pDepthBufferCopy, cq_savedDepthResource);
+	}
 	
-	ID3D11Resource *backBuffer = NULL;
+	if (shouldCreateSharedMem)
+	{
+		createdSharedMem = createSharedMem(cq_savedDepthResource, device);
+	}
 
-//    logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq trying to share mem cqcqcqcqcqcqcqcq" << endl;
-    if(shouldCreateSharedMem && createSharedDepthHandle() && setSharedHandleGame2Sensor(device))
-    {
-        UINT mapId = InitializeSharedMemoryGPUCaptureDepth(&texDataDepth);
-        texDataDepth->depthTexHandle = (DWORD)sharedDepthHandle; // FUCKING HANDLE
-		texDataDepth->texHandle = (DWORD)sharedHandle2;
-        shouldCreateSharedMem = false;
-		createdSharedMem = true;
-		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared mem cqcqcqcqcqcqcqcq" << endl;
-    }
-
-    if(createdSharedMem && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
+	// Copy camera
+	ID3D11Resource *backBuffer = nullptr;
+	if (createdSharedMem && SUCCEEDED(hRes = swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
         {
             if(bIsMultisampled)
             {
@@ -163,7 +200,7 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
             backBuffer->Release();
 	}
 
-    if (shouldWriteDepthTOFile) {
+	if (shouldWriteDepthTOFile && cq_savedDepthResource) {
         D3D11_MAPPED_SUBRESOURCE mappedResource;
 
         HRESULT mapResult = devcon->Map(cq_pDepthBufferCopy, 0, D3D11_MAP_READ, 0, &mappedResource);
@@ -174,7 +211,7 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
         float *fDepths = getDepthsAsFloats(cq_height, cq_width, pYourBytes);
 
         std::ofstream myfile;
-        myfile.open(filename);
+        myfile.open(depthFilename);
         auto floatWidth = cq_height * cq_width;
         for (auto i = 0; i < floatWidth; i++) {
             myfile << fDepths[i] << " ";
@@ -190,18 +227,35 @@ void copyDepth(IDXGISwapChain* swap, ID3D11Resource * cq_savedDepthResource, str
     device->Release();
 }
 
-void copyDepthResources(IDXGISwapChain *swap)
+bool isFirstCopySenorResources = true;
+
+void copySensorResources(IDXGISwapChain *swap, bool isCaptureDepthEnabled)
 {
-	auto i = 0;
-	for (auto &resource : cq_depthResources)
+	if (isFirstCopySenorResources)
 	{
-		string filename = depthFileName + to_string(i);
-		if( i == depthViewTarget ) // || file_exists(filename) == false )
-		{
-			copyDepth(swap, resource, filename);
-		}
-		i++;
+		logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq copySensorResources called first time cqcqcqcqcqcqcqcq" << endl;
 	}
+
+	auto i = 0;
+	string filename = depthFileName + to_string(i);
+	if (isCaptureDepthEnabled && cq_depthResources.size() > 0)
+	{
+		for (auto &depthResource : cq_depthResources)
+		{
+			if (i == depthViewTarget) // || file_exists(filename) == false )
+			{
+				copySensors(swap, depthResource, filename);  // TODO: Separate depth more cleanly
+			}
+			i++;
+		}
+	}
+	else
+	{
+		copySensors(swap, nullptr, filename); // TODO: Separate depth more cleanly
+	}
+
+	isFirstCopySenorResources = false;
+
 }
 
 void clearDepthResources()
@@ -315,7 +369,7 @@ typedef HRESULT (WINAPI *CREATEDXGIFACTORY1PROC)(REFIID riid, void **ppFactory);
 
 bool createSharedDepthHandle()
 {
-
+	logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Trying to create shared depth handle cqcqcqcqcqcqcqcq" << endl;
 	// convert texture to d3d11 resource
 	if (cq_pDepthBufferCopy->QueryInterface(__uuidof(ID3D11Resource), (void**)&cq_pDepthBufferCopy) != S_OK)
 	{
@@ -348,6 +402,7 @@ bool createSharedDepthHandle()
 
 bool setSharedHandleGame2Sensor(ID3D11Device *device)
 {
+	logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq Created shared handle game2sensor cqcqcqcqcqcqcqcq" << endl;
 	HRESULT hErr;
 
     D3D11_TEXTURE2D_DESC texGameDesc;
@@ -644,6 +699,7 @@ void DoD3D11Capture(IDXGISwapChain *swap)
                     SetEvent(hSignalReady);
 
                     logOutput << CurrentTimeString() << "DoD3D11Hook: success" << endl;
+					logOutput << CurrentTimeString() << "cqcqcqcqcqcqcqcq setting shouldCreateSharedMem cqcqcqcqcqcqcqcq" << endl;
 					shouldCreateSharedMem = true;
                 }
                 else

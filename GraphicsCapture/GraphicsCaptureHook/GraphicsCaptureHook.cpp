@@ -233,7 +233,7 @@ UINT InitializeSharedMemoryGPUCapture(SharedTexData **texData)
     return sharedMemoryIDCounter;
 }
 
-UINT InitializeSharedMemoryGPUCaptureDepth(SharedTexData **texDataDepth)
+UINT InitializeSharedMemoryGPUCaptureGame2Sensor(SharedTexData **texDataDepth)
 {
     int totalSize = sizeof(SharedTexData);
 

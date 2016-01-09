@@ -382,7 +382,7 @@ void   WINAPI OSCloseMutex(HANDLE hMutex);
 
 UINT InitializeSharedMemoryCPUCapture(UINT textureSize, DWORD *totalSize, MemoryCopyData **copyData, LPBYTE *textureBuffers);
 UINT InitializeSharedMemoryGPUCapture(SharedTexData **texData);
-UINT InitializeSharedMemoryGPUCaptureDepth(SharedTexData **texData);
+UINT InitializeSharedMemoryGPUCaptureGame2Sensor(SharedTexData **texData);
 void DestroySharedMemory();
 
 bool InitD3D8Capture();
