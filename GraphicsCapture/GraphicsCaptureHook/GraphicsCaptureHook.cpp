@@ -239,6 +239,8 @@ UINT InitializeSharedMemoryGPUCaptureGame2Sensor(SharedTexData **texDataDepth)
 
     wstringstream strName;
     strName << SHARED_CPU_MEMORY; // << ++sharedMemoryIDCounter;
+
+	// TODO: Use your own file map, don't share with texture memory.
     hFileMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, totalSize, strName.str().c_str());
     if(!hFileMap)
     {
